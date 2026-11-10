@@ -67,10 +67,17 @@ Open [http://localhost:8501](http://localhost:8501) in your browser.
 4. (Optional) Enable custom tags in the sidebar
 5. Click **Start Scoring** — results appear as a ranked list
 
+## Speed
+
+- Thinking is turned off for scoring and the response is forced into JSON, so each photo takes ~3 s instead of ~12 s (gemini-2.5-flash, measured on 10 MB JPEGs).
+- Requests are spaced to stay under your requests-per-minute (RPM) limit, set in the sidebar. If the API still returns 429, the app waits for the delay the API asks for and resumes.
+- Photos you have already scored (same image bytes) are not sent again: their previous result is reused. Tick "re-score" in the sidebar to force a new evaluation.
+
 ## Limitations
 
-- Free Gemini tier: max 15 images/min (~4 min for 50 images)
-- Daily cap: 1,500 images
+- On the free Gemini tier, throughput is capped by your RPM limit (e.g. 10 RPM → ~5 min for 50 new photos). Check your current limits in Google AI Studio.
+- gemini-2.5-flash-lite is faster and has a higher free-tier limit, but it tends to score more generously.
+- Skipping only works for photos scored after this feature was added (older results have no file hash).
 
 ## Tech Stack
 

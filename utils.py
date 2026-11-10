@@ -1,15 +1,97 @@
 import json
+import re
 import time
 import io
 import base64
+import hashlib
+import threading
 from pathlib import Path
 from datetime import datetime
-from PIL import Image
+from PIL import Image, ImageOps
 from google import genai
 from google.genai import types
 from db import get_db
 
 MODEL_NAME = "gemini-2.5-flash"
+
+# 採点ページで選べるモデル（表示名: モデルID）
+SCORING_MODELS = {
+    "gemini-2.5-flash（標準・今までと同じ）": "gemini-2.5-flash",
+    "gemini-2.5-flash-lite（速い・無料枠の上限が高め）": "gemini-2.5-flash-lite",
+}
+
+
+# ─── レート制御 ─────────────────────────────────────────────
+class RateLimiter:
+    """1分あたりのリクエスト数を守るための簡単なリミッタ（スレッドセーフ）"""
+
+    def __init__(self, rpm: float):
+        self.interval = 60.0 / max(rpm, 1)
+        self._lock = threading.Lock()
+        self._next = 0.0
+
+    def acquire(self) -> None:
+        with self._lock:
+            now = time.monotonic()
+            wait = self._next - now
+            self._next = max(now, self._next) + self.interval
+        if wait > 0:
+            time.sleep(wait)
+
+    def pause(self, seconds: float) -> None:
+        """429を受けたとき、全スレッドの次の送信をまとめて遅らせる"""
+        with self._lock:
+            self._next = max(self._next, time.monotonic() + seconds)
+
+
+def _is_rate_limit(e: Exception) -> bool:
+    s = str(e)
+    return "429" in s or "RESOURCE_EXHAUSTED" in s
+
+
+def _retry_delay(e: Exception, default: float) -> float:
+    """エラーに含まれる retryDelay（例: '23s'）を読む。なければ default"""
+    m = re.search(r"retry(?:Delay|\s+in)['\"]?\s*[:=]?\s*['\"]?([\d.]+)\s*s", str(e), re.I)
+    return float(m.group(1)) + 1 if m else default
+
+
+def _gen_config(model: str, schema: dict = None) -> types.GenerateContentConfig:
+    """thinkingを最小にして、JSONで返させる設定"""
+    if model.startswith("gemini-2.5"):
+        thinking = types.ThinkingConfig(thinking_budget=0)
+    else:
+        thinking = types.ThinkingConfig(thinking_level="minimal")
+    kwargs = {"thinking_config": thinking}
+    if schema is not None:
+        kwargs["response_mime_type"] = "application/json"
+        kwargs["response_schema"] = schema
+    return types.GenerateContentConfig(**kwargs)
+
+
+SCORE_SCHEMA = {
+    "type": "OBJECT",
+    "properties": {
+        "technical_score": {"type": "INTEGER"},
+        "composition_score": {"type": "INTEGER"},
+        "total_score": {"type": "INTEGER"},
+        "technical_reason": {"type": "STRING"},
+        "composition_reason": {"type": "STRING"},
+        "overall_comment": {"type": "STRING"},
+        "tags": {"type": "ARRAY", "items": {"type": "STRING"}},
+    },
+    "required": ["technical_score", "composition_score", "technical_reason",
+                 "composition_reason", "overall_comment", "tags"],
+}
+
+TAGS_SCHEMA = {
+    "type": "OBJECT",
+    "properties": {"tags": {"type": "ARRAY", "items": {"type": "STRING"}}},
+    "required": ["tags"],
+}
+
+
+def file_hash(raw_bytes: bytes) -> str:
+    return hashlib.sha256(raw_bytes).hexdigest()
 
 SCORING_BASE = """
 あなたはプロの写真家であり、厳格な写真品質評価の専門家です。
@@ -99,8 +181,11 @@ def parse_json_response(text: str) -> dict:
 def prepare_image(raw_bytes: bytes) -> tuple:
     """画像バイトを受け取り (API用bytes, サムネイルb64文字列) を返す"""
     img = Image.open(io.BytesIO(raw_bytes))
+    if img.format == "JPEG":
+        # 大きいJPEGは縮小しながらデコードする（読み込みが数倍速い）
+        # 送るのは最大1024pxなので、それ以上の解像度は保ったまま縮小される
+        img.draft("RGB", (1024, 1024))
     try:
-        from PIL import ImageOps
         img = ImageOps.exif_transpose(img)
     except Exception:
         pass
@@ -125,35 +210,56 @@ def prepare_image(raw_bytes: bytes) -> tuple:
     return api_bytes, thumb_b64
 
 
-def score_photo(client, filename: str, raw_bytes: bytes, custom_tags: list = None) -> dict:
+def score_photo(client, filename: str, raw_bytes: bytes, custom_tags: list = None,
+                model: str = MODEL_NAME, limiter: RateLimiter = None) -> dict:
     """採点＋タグ生成を1回のAPI呼び出しで実行する"""
     api_bytes, thumb_b64 = prepare_image(raw_bytes)
     prompt = build_scoring_prompt(custom_tags)
+    config = _gen_config(model, SCORE_SCHEMA)
 
-    for attempt in range(5):
+    other_errors = 0
+    rate_errors = 0
+    while True:
+        if limiter:
+            limiter.acquire()
         try:
             response = client.models.generate_content(
-                model=MODEL_NAME,
+                model=model,
                 contents=[
                     types.Part.from_bytes(data=api_bytes, mime_type="image/jpeg"),
                     prompt,
                 ],
+                config=config,
             )
             text = response.text if response.text else ""
             if not text.strip():
                 raise ValueError("empty response")
             result = parse_json_response(text)
+            result["technical_score"] = max(0, min(50, int(result["technical_score"])))
+            result["composition_score"] = max(0, min(50, int(result["composition_score"])))
             result["total_score"] = result["technical_score"] + result["composition_score"]
             result["filename"] = filename
             result["thumbnail_b64"] = thumb_b64
+            result["file_hash"] = file_hash(raw_bytes)
             if "tags" not in result:
                 result["tags"] = []
             return result
-        except Exception:
-            if attempt < 4:
-                time.sleep(min(5 * (2 ** attempt), 60))
+        except Exception as e:
+            if _is_rate_limit(e):
+                # 無料枠の上限：指定された秒数だけ全体を止めてから再送（失敗回数には数えすぎない）
+                rate_errors += 1
+                if rate_errors > 6:
+                    raise
+                delay = _retry_delay(e, 15)
+                if limiter:
+                    limiter.pause(delay)
+                else:
+                    time.sleep(delay)
             else:
-                raise
+                other_errors += 1
+                if other_errors > 2:
+                    raise
+                time.sleep(2 * other_errors)
 
 
 def generate_tags(client, image_bytes: bytes, custom_tags: list = None) -> list:
@@ -167,15 +273,16 @@ def generate_tags(client, image_bytes: bytes, custom_tags: list = None) -> list:
                     types.Part.from_bytes(data=image_bytes, mime_type="image/jpeg"),
                     prompt,
                 ],
+                config=_gen_config(MODEL_NAME, TAGS_SCHEMA),
             )
             text = response.text.strip() if response.text else ""
             if not text:
                 raise ValueError("empty response")
             data = parse_json_response(text)
             return data.get("tags", [])
-        except Exception:
+        except Exception as e:
             if attempt < 2:
-                time.sleep(5 * (2 ** attempt))
+                time.sleep(_retry_delay(e, 5 * (2 ** attempt)) if _is_rate_limit(e) else 2)
     return []
 
 
@@ -248,6 +355,7 @@ def search_photos(client, query: str, all_photos: list) -> list:
     ...
   ]
 }}"""
-    response = client.models.generate_content(model=MODEL_NAME, contents=[prompt])
+    response = client.models.generate_content(
+        model=MODEL_NAME, contents=[prompt], config=_gen_config(MODEL_NAME))
     data = parse_json_response(response.text)
     return data.get("results", [])

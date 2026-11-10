@@ -4,8 +4,12 @@ import base64
 from pathlib import Path
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from utils import score_photo, score_badge, save_session
+from utils import (score_photo, score_badge, save_session, load_all_sessions,
+                   file_hash, RateLimiter, SCORING_MODELS)
 from google import genai
+
+# モデルごとの初期RPM（無料枠の目安。上限が違えばサイドバーで変更できる）
+DEFAULT_RPM = {"gemini-2.5-flash": 10, "gemini-2.5-flash-lite": 15}
 
 st.title("📸 写真採点")
 st.caption("写真をアップロードして採点を開始してください")
@@ -14,9 +18,16 @@ with st.sidebar:
     st.divider()
     st.subheader("処理オプション")
     max_photos = st.number_input("最大処理枚数", min_value=1, max_value=1000, value=50)
-    parallel = st.slider("並列処理数", min_value=1, max_value=10, value=5,
-                         help="同時処理数。エラーが多い場合は減らしてください")
-    st.caption("⏱ 並列5で50枚 → 約30秒")
+    model_label = st.selectbox("モデル", list(SCORING_MODELS.keys()))
+    model = SCORING_MODELS[model_label]
+    rpm = st.number_input(
+        "1分あたりの上限（RPM）", min_value=1, max_value=1000,
+        value=DEFAULT_RPM.get(model, 10), key=f"rpm_{model}",
+        help="無料枠ならこのままでOK。有料プランなら大きくすると速くなります。"
+             "上限を超えても、APIの指示どおり自動で待って再開します",
+    )
+    rescore = st.checkbox("採点済みの写真も採点し直す", value=False,
+                          help="オフなら、前に採点した同じ写真は過去の結果を再利用します")
 
 # ─── ファイルアップロード ─────────────────────────────────────
 uploaded_files = st.file_uploader(
@@ -31,6 +42,8 @@ api_key = st.session_state.get("api_key", "")
 if uploaded_files:
     count = min(len(uploaded_files), int(max_photos))
     st.success(f"📷 {len(uploaded_files)}枚選択済み（最大{int(max_photos)}枚を処理）")
+    st.caption(f"⏱ 目安：{count}枚 → 約{count / int(rpm):.1f}分"
+               "（採点済みの写真があればもっと短くなります）")
 
 start_btn = st.button(
     "▶ 採点開始",
@@ -46,25 +59,67 @@ if start_btn and uploaded_files:
     custom_tags = st.session_state.get("custom_tags") or None
     results = []
     errors = []
-    completed = 0
 
+    # ─── 採点済みの写真を探す（同じ画像データなら過去の結果を再利用）────
+    known = {}
+    if not rescore:
+        try:
+            for s in load_all_sessions(st.session_state.get("username")):
+                for r in s["results"]:
+                    h = r.get("file_hash")
+                    if h and h not in known:
+                        known[h] = r
+        except Exception as e:
+            st.warning(f"過去の結果を読み込めなかったので、全部採点します（{e}）")
+
+    to_score = []        # (name, data, hash)
+    dup_of = []          # 今回の中で重複している写真 (name, hash)
+    seen = set()
+    reused = 0
+    for name, data in file_data:
+        h = file_hash(data)
+        if h in known:
+            results.append({**known[h], "filename": name})
+            reused += 1
+        elif h in seen:
+            dup_of.append((name, h))
+        else:
+            seen.add(h)
+            to_score.append((name, data, h))
+
+    if reused:
+        st.info(f"♻️ {reused}枚は採点済みだったので、過去の結果を使いました")
+
+    total = len(to_score)
+    completed = 0
     progress_bar = st.progress(0, text="採点を開始します...")
     status_text = st.empty()
+    scored_by_hash = {}
 
-    with ThreadPoolExecutor(max_workers=int(parallel)) as executor:
-        future_to_name = {
-            executor.submit(score_photo, client, name, data, custom_tags): name
-            for name, data in file_data
-        }
-        for future in as_completed(future_to_name):
-            fname = future_to_name[future]
-            completed += 1
-            status_text.markdown(f"**処理中... {completed}/{len(file_data)}**　`{fname}`")
-            progress_bar.progress(completed / len(file_data), text=f"{completed}/{len(file_data)} 枚処理中")
-            try:
-                results.append(future.result())
-            except Exception as e:
-                errors.append(f"{fname}: {e}")
+    if total:
+        limiter = RateLimiter(int(rpm))
+        # 応答待ちの間も次を送れるように少しだけ並列にする（送信間隔はlimiterが守る）
+        workers = max(1, min(4, total, int(rpm) // 5 + 1))
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            future_to_item = {
+                executor.submit(score_photo, client, name, data, custom_tags, model, limiter): (name, h)
+                for name, data, h in to_score
+            }
+            for future in as_completed(future_to_item):
+                fname, h = future_to_item[future]
+                completed += 1
+                status_text.markdown(f"**処理中... {completed}/{total}**　`{fname}`")
+                progress_bar.progress(completed / total, text=f"{completed}/{total} 枚処理中")
+                try:
+                    res = future.result()
+                    results.append(res)
+                    scored_by_hash[h] = res
+                except Exception as e:
+                    errors.append(f"{fname}: {e}")
+
+    for name, h in dup_of:
+        if h in scored_by_hash:
+            results.append({**scored_by_hash[h], "filename": name})
 
     progress_bar.progress(1.0, text="✅ 採点完了！")
     status_text.empty()
