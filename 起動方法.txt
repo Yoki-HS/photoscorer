@@ -43,6 +43,20 @@
   採点し直したいときは、サイドバーの「採点済みの写真も採点し直す」をオンにする
   ※この機能を入れる前に採点した写真は対象外
 
+【Supabase（ユーザー情報・履歴のDB）が止まらないようにする仕組み】
+-------------------------------
+- Supabaseの無料プランは、しばらく誰もアクセスしないと自動で一時停止する
+  （止まると、ユーザー登録やログインで httpx.ConnectError が出る）
+- GitHub Actions が3日おきにDBへ軽くアクセスして、止まらないようにしている
+  ファイル: .github/workflows/supabase-keepalive.yml
+- 最初に一度だけ、GitHubのリポジトリで設定が必要：
+  Settings → Secrets and variables → Actions → New repository secret で
+  SUPABASE_URL と SUPABASE_KEY を登録する（値は .streamlit/secrets.toml と同じ）
+  登録したら、Actionsタブの「Supabase keep-alive」→「Run workflow」で一度試す
+- リポジトリに60日間コミットがないと、GitHubがこの定期実行を自動で止める
+  そのときはメールが来るので、Actionsタブから有効に戻す
+- もし止まってしまったら：https://supabase.com/dashboard で「Resume project」を押す
+
 【注意事項】
 -------------------------------
 - 対応形式: jpg, jpeg, png, webp, heic, bmp, tiff

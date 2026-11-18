@@ -1,0 +1,39 @@
+# Supabase の無料プランは、しばらくアクセスがないとプロジェクトが自動で一時停止する。
+# 3日おきにDBへ軽い読み取りを1回送って、止まらないようにする。
+#
+# 必要な GitHub Secrets（Settings → Secrets and variables → Actions）:
+#   SUPABASE_URL  … https://xxxx.supabase.co
+#   SUPABASE_KEY  … .streamlit/secrets.toml と同じキー
+name: Supabase keep-alive
+
+on:
+  schedule:
+    - cron: "17 3 */3 * *"   # 3日おき 03:17 UTC（日本時間 12:17）
+  workflow_dispatch:          # Actions タブから手動でも実行できる
+
+permissions:
+  contents: read
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Query Supabase
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: |
+          if [ -z "$SUPABASE_URL" ] || [ -z "$SUPABASE_KEY" ]; then
+            echo "::error::SUPABASE_URL / SUPABASE_KEY が GitHub Secrets に登録されていません"
+            exit 1
+          fi
+          status=$(curl -sS -o /dev/null -w "%{http_code}" --retry 3 --retry-delay 10 \
+            "${SUPABASE_URL%/}/rest/v1/users?select=username&limit=1" \
+            -H "apikey: $SUPABASE_KEY" \
+            -H "Authorization: Bearer $SUPABASE_KEY")
+          echo "HTTP $status"
+          if [ "$status" != "200" ]; then
+            echo "::error::Supabase が応答しません（HTTP $status）。プロジェクトが一時停止していないか確認してください"
+            exit 1
+          fi

@@ -82,6 +82,15 @@ Chosen from a comparison of six models (Nov 2026, 10 photos × 2 runs). 3.8-flas
 - Photos are scored in parallel (up to 20 at once), spaced to stay under the requests-per-minute (RPM) limit set in the sidebar (default 900). If the API still returns 429, the app waits for the delay the API asks for and resumes.
 - Photos you have already scored (same image bytes) are not sent again: their previous result is reused. Tick "re-score" in the sidebar to force a new evaluation.
 
+## Keeping Supabase awake
+
+Free Supabase projects are paused after a period of inactivity. The workflow `.github/workflows/supabase-keepalive.yml` sends one light read query every 3 days. To enable it, add two repository secrets under **Settings → Secrets and variables → Actions**:
+
+- `SUPABASE_URL`
+- `SUPABASE_KEY`
+
+Use the same values as in `.streamlit/secrets.toml`, then run the workflow once from the **Actions** tab to check it. Note that GitHub disables scheduled workflows in a repository with no commits for 60 days; if that happens, re-enable it from the Actions tab.
+
 ## Limitations
 
 - Rate limits depend on your project's tier; check them on the Rate Limit page in Google AI Studio and set the RPM in the sidebar a little below it.
