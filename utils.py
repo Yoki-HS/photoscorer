@@ -12,12 +12,24 @@ from google import genai
 from google.genai import types
 from db import get_db
 
-MODEL_NAME = "gemini-2.5-flash"
+# 採点・タグ生成・検索・チャットで使う標準モデル
+# （gemini-2.5-flash は 2026-12-01 に終了するので 3.8-flash に移行）
+MODEL_NAME = "gemini-3.8-flash"
 
 # 採点ページで選べるモデル（表示名: モデルID）
+# 2026-11 に写真10枚×2回で比較：3.8-flash と 4-hydrogen は順位がほぼ同じ（相関0.88）で、
+# 3.8-flash のほうが約4分の1の料金。lite系は採点が甘く、点差が小さいので外した。
 SCORING_MODELS = {
-    "gemini-2.5-flash（標準・今までと同じ）": "gemini-2.5-flash",
-    "gemini-2.5-flash-lite（速い・無料枠の上限が高め）": "gemini-2.5-flash-lite",
+    "gemini-3.8-flash（標準・1枚約0.23円）": "gemini-3.8-flash",
+    "gemini-4-hydrogen（点差が少し広い・1枚約0.9円）": "gemini-4-hydrogen",
+}
+
+# モデルごとのthinking設定（どちらも MINIMAL は非対応）
+#   3.8-flash：thinking_budget=0 が使えて、出力トークンが減って安くなる
+#   4-hydrogen：budget=0 にしても実際は考えるので、明示的に low にする
+_THINKING = {
+    "gemini-3.8-flash": types.ThinkingConfig(thinking_budget=0),
+    "gemini-4-hydrogen": types.ThinkingConfig(thinking_level="low"),
 }
 
 
@@ -57,12 +69,16 @@ def _retry_delay(e: Exception, default: float) -> float:
 
 def _gen_config(model: str, schema: dict = None) -> types.GenerateContentConfig:
     """thinkingを最小にして、JSONで返させる設定"""
-    if model.startswith("gemini-2.5"):
+    if model in _THINKING:
+        thinking = _THINKING[model]
+    elif model.startswith("gemini-2.5"):
         thinking = types.ThinkingConfig(thinking_budget=0)
     else:
-        thinking = types.ThinkingConfig(thinking_level="minimal")
+        thinking = types.ThinkingConfig(thinking_level="low")
     kwargs = {"thinking_config": thinking}
     if schema is not None:
+        # 画像を読む細かさを中くらいにする（点数はほぼ同じで、入力トークンが約2〜3割減る）
+        kwargs["media_resolution"] = "MEDIA_RESOLUTION_MEDIUM"
         kwargs["response_mime_type"] = "application/json"
         kwargs["response_schema"] = schema
     return types.GenerateContentConfig(**kwargs)

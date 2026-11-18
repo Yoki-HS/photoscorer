@@ -8,8 +8,11 @@ from utils import (score_photo, score_badge, save_session, load_all_sessions,
                    file_hash, RateLimiter, SCORING_MODELS)
 from google import genai
 
-# モデルごとの初期RPM（無料枠の目安。上限が違えばサイドバーで変更できる）
-DEFAULT_RPM = {"gemini-2.5-flash": 10, "gemini-2.5-flash-lite": 15}
+# 初期RPM：Tier 1 の上限（3.8-flash / 4-hydrogen とも 1,000 RPM）より少し低めにしておく
+DEFAULT_RPM = 900
+# 同時に送る数。1枚の応答に約8秒かかるので、並列にして待ち時間を重ねる
+MAX_WORKERS = 20
+SEC_PER_PHOTO = 8  # 目安表示用（2026-11 の実測）
 
 st.title("📸 写真採点")
 st.caption("写真をアップロードして採点を開始してください")
@@ -21,9 +24,8 @@ with st.sidebar:
     model_label = st.selectbox("モデル", list(SCORING_MODELS.keys()))
     model = SCORING_MODELS[model_label]
     rpm = st.number_input(
-        "1分あたりの上限（RPM）", min_value=1, max_value=1000,
-        value=DEFAULT_RPM.get(model, 10), key=f"rpm_{model}",
-        help="無料枠ならこのままでOK。有料プランなら大きくすると速くなります。"
+        "1分あたりの上限（RPM）", min_value=1, max_value=4000, value=DEFAULT_RPM,
+        help="AI Studio の「レート制限」ページで確認できる上限より少し低めにしてください。"
              "上限を超えても、APIの指示どおり自動で待って再開します",
     )
     rescore = st.checkbox("採点済みの写真も採点し直す", value=False,
@@ -42,7 +44,10 @@ api_key = st.session_state.get("api_key", "")
 if uploaded_files:
     count = min(len(uploaded_files), int(max_photos))
     st.success(f"📷 {len(uploaded_files)}枚選択済み（最大{int(max_photos)}枚を処理）")
-    st.caption(f"⏱ 目安：{count}枚 → 約{count / int(rpm):.1f}分"
+    workers = min(MAX_WORKERS, count)
+    est_sec = max(count * 60 / int(rpm), -(-count // workers) * SEC_PER_PHOTO)
+    est = f"{est_sec:.0f}秒" if est_sec < 90 else f"{est_sec / 60:.1f}分"
+    st.caption(f"⏱ 目安：{count}枚 → 約{est}"
                "（採点済みの写真があればもっと短くなります）")
 
 start_btn = st.button(
@@ -98,8 +103,8 @@ if start_btn and uploaded_files:
 
     if total:
         limiter = RateLimiter(int(rpm))
-        # 応答待ちの間も次を送れるように少しだけ並列にする（送信間隔はlimiterが守る）
-        workers = max(1, min(4, total, int(rpm) // 5 + 1))
+        # 応答待ちの間に次を送れるよう並列にする（送信間隔はlimiterが守る）
+        workers = max(1, min(MAX_WORKERS, total))
         with ThreadPoolExecutor(max_workers=workers) as executor:
             future_to_item = {
                 executor.submit(score_photo, client, name, data, custom_tags, model, limiter): (name, h)

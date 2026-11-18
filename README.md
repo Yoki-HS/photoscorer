@@ -67,16 +67,24 @@ Open [http://localhost:8501](http://localhost:8501) in your browser.
 4. (Optional) Enable custom tags in the sidebar
 5. Click **Start Scoring** — results appear as a ranked list
 
+## Models
+
+| Model | Role | Approx. cost per photo |
+|-------|------|------------------------|
+| `gemini-3.8-flash` | Default for scoring, tags, search and chat | ~$0.0015 (doubles from 2027-01-01) |
+| `gemini-4-hydrogen` | Optional; slightly wider score spread | ~$0.006 |
+
+Chosen from a comparison of six models (Nov 2026, 10 photos × 2 runs). 3.8-flash and 4-hydrogen ranked photos almost identically (Spearman 0.88) and both match the prompt's strict scale; the lite models scored more generously with a narrower spread. `gemini-2.5-flash` shuts down on 2026-12-01.
+
 ## Speed
 
-- Thinking is turned off for scoring and the response is forced into JSON, so each photo takes ~3 s instead of ~12 s (gemini-2.5-flash, measured on 10 MB JPEGs).
-- Requests are spaced to stay under your requests-per-minute (RPM) limit, set in the sidebar. If the API still returns 429, the app waits for the delay the API asks for and resumes.
+- Thinking is kept to the minimum each model allows, images are read at medium resolution and the response is forced into JSON.
+- Photos are scored in parallel (up to 20 at once), spaced to stay under the requests-per-minute (RPM) limit set in the sidebar (default 900). If the API still returns 429, the app waits for the delay the API asks for and resumes.
 - Photos you have already scored (same image bytes) are not sent again: their previous result is reused. Tick "re-score" in the sidebar to force a new evaluation.
 
 ## Limitations
 
-- On the free Gemini tier, throughput is capped by your RPM limit (e.g. 10 RPM → ~5 min for 50 new photos). Check your current limits in Google AI Studio.
-- gemini-2.5-flash-lite is faster and has a higher free-tier limit, but it tends to score more generously.
+- Rate limits depend on your project's tier; check them on the Rate Limit page in Google AI Studio and set the RPM in the sidebar a little below it.
 - Skipping only works for photos scored after this feature was added (older results have no file hash).
 
 ## Tech Stack
