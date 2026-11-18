@@ -13,7 +13,7 @@ st.caption("キーワードで過去に採点した写真を検索します")
 
 api_key = st.session_state.get("api_key", "")
 if not api_key:
-    st.warning("左サイドバーにAPIキーを入力してください")
+    st.warning("APIキーが設定されていないため、検索は使えません（管理者に連絡してください）")
     st.stop()
 
 # ─── 全写真をロード ─────────────────────────────────────────

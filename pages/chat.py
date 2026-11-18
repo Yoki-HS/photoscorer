@@ -12,7 +12,7 @@ st.caption("採点結果について詳しく質問できます")
 
 api_key = st.session_state.get("api_key", "")
 if not api_key:
-    st.warning("左サイドバーにAPIキーを入力してください")
+    st.warning("APIキーが設定されていないため、チャットは使えません（管理者に連絡してください）")
     st.stop()
 
 # ─── 写真の選択 ─────────────────────────────────────────────

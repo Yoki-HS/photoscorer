@@ -2,12 +2,12 @@ import streamlit as st
 
 st.set_page_config(page_title="写真採点ツール", page_icon="📸", layout="wide")
 
-# ─── APIキーをSecretsから自動取得 ────────────────────────────
-if "api_key" not in st.session_state:
-    try:
-        st.session_state["api_key"] = st.secrets.get("GEMINI_API_KEY", "")
-    except Exception:
-        st.session_state["api_key"] = ""
+# ─── APIキーをSecretsから取得（ユーザーには入力させない）──────────
+# APIの料金は作成者が負担するので、キーは毎回 Secrets から読む
+try:
+    st.session_state["api_key"] = st.secrets.get("GEMINI_API_KEY", "")
+except Exception:
+    st.session_state["api_key"] = ""
 
 # ─── ログインチェック ────────────────────────────────────────
 if "username" not in st.session_state:
@@ -19,24 +19,10 @@ if "username" not in st.session_state:
 with st.sidebar:
     st.header("⚙️ 設定")
 
-    # Secretsにキーがなければ手動入力欄を表示
+    # Secretsにキーがないときだけ、管理者向けの注意を出す
     if not st.session_state.get("api_key"):
-        def _save_api_key():
-            val = st.session_state.get("_api_key_widget", "")
-            if val:
-                st.session_state["api_key"] = val
-
-        st.text_input(
-            "Gemini APIキー",
-            type="password",
-            placeholder="AIza...",
-            key="_api_key_widget",
-            on_change=_save_api_key,
-        )
-        if st.session_state["api_key"]:
-            st.caption("✅ APIキー設定済み")
-        else:
-            st.caption("⚠️ APIキーを入力してEnterを押してください")
+        st.error("Gemini APIキーが設定されていません。"
+                 "管理者は Streamlit の Secrets に GEMINI_API_KEY を登録してください")
 
     st.divider()
     st.subheader("🏷️ タグ設定")

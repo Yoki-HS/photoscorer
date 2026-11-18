@@ -49,7 +49,7 @@ url = "https://your-project.supabase.co"
 key = "your-anon-key"
 ```
 
-> You can also enter the Gemini API key manually in the sidebar at runtime.
+> The Gemini API key is read from secrets only; users are never asked for a key. On Streamlit Community Cloud, add the same values under the app's **Settings → Secrets**.
 
 ### 4. Run the app
 

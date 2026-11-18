@@ -67,7 +67,6 @@ with tab_register:
             if ok:
                 st.success(f"✅ {msg}　→ ログインしてください")
                 st.session_state["username"] = new_username.strip()
-                st.session_state["api_key"] = ""
                 st.rerun()
             else:
                 st.error(msg)
