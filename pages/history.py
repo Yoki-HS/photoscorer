@@ -30,6 +30,10 @@ for i, session in enumerate(sessions):
         col_a.metric("平均スコア", f"{sum(scores)/len(scores):.1f}")
         col_b.metric("最高スコア", f"{max(scores)}")
         col_c.metric("最低スコア", f"{min(scores)}")
+        if st.button("💬 この回の写真をまとめてチャットで聞く", key=f"hist_multi_{i}"):
+            st.session_state["chat_mode"] = "multi"
+            st.session_state["chat_session_idx"] = i
+            st.switch_page("pages/chat.py")
         st.divider()
 
         for rank, result in enumerate(results, 1):
@@ -50,4 +54,5 @@ for i, session in enumerate(sessions):
                 st.caption(f"💬 {result.get('overall_comment', '')}")
                 if st.button("💬 チャットで詳しく聞く", key=f"hist_chat_{i}_{rank}"):
                     st.session_state["chat_photo"] = result
+                    st.session_state["chat_mode"] = "single"
                     st.switch_page("pages/chat.py")

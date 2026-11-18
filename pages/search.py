@@ -195,6 +195,7 @@ if "search_results" in st.session_state:
 
                 if st.button("💬 チャットで詳しく聞く", key=f"srch_chat_{rank}"):
                     st.session_state["chat_photo"] = photo
+                    st.session_state["chat_mode"] = "single"
                     st.switch_page("pages/chat.py")
 
             st.divider()

@@ -302,6 +302,65 @@ def generate_tags(client, image_bytes: bytes, custom_tags: list = None) -> list:
     return []
 
 
+MAX_CHAT_IMAGES = 60  # まとめてチャットで画像として送る最大枚数（残りは点数・コメントだけ送る）
+
+
+def pick_chat_images(photos: list, limit: int = MAX_CHAT_IMAGES) -> set:
+    """画像として送る写真の番号（0始まり）を選ぶ。多すぎるときは点数順に均等に間引く"""
+    n = len(photos)
+    if n <= limit:
+        return set(range(n))
+    order = sorted(range(n), key=lambda i: -photos[i].get("total_score", 0))
+    step = (n - 1) / (limit - 1)
+    return {order[round(k * step)] for k in range(limit)}
+
+
+def build_multi_chat_parts(photos: list, question: str) -> list:
+    """複数の写真について質問するための、最初のメッセージ（文章＋サムネイル）を作る"""
+    from collections import Counter
+    n = len(photos)
+    totals = [p["total_score"] for p in photos]
+    techs = [p.get("technical_score", 0) for p in photos]
+    comps = [p.get("composition_score", 0) for p in photos]
+    tag_count = Counter(t for p in photos for t in p.get("tags", []))
+    top_tags = "、".join(f"{t}({c})" for t, c in tag_count.most_common(15)) or "なし"
+    with_image = pick_chat_images(photos)
+
+    lines = []
+    for i, p in enumerate(photos, 1):
+        lines.append(
+            f"写真{i}: {p['filename']} | 総合 {p['total_score']}/100"
+            f"（技術 {p.get('technical_score', '?')}/50・構図 {p.get('composition_score', '?')}/50）"
+            f" | 技術: {p.get('technical_reason', '')} | 構図: {p.get('composition_reason', '')}"
+            f" | コメント: {p.get('overall_comment', '')} | タグ: {'、'.join(p.get('tags', []))}"
+            + ("" if (i - 1) in with_image else " | （画像なし）")
+        )
+
+    header = f"""あなたはプロの写真家で、写真の講評と上達のアドバイスの専門家です。
+ユーザーが撮った写真{n}枚の採点結果と、写真のサムネイルを渡します。
+個々の写真ではなく、全体を通して見える傾向（得意・苦手、よくあるミス、撮影シーンの偏りなど）や、
+次の撮影で意識するとよいことを、具体的な写真番号を挙げながら日本語で答えてください。
+サムネイルは小さいので、ピントやノイズなど細かい点は採点結果の文章も参考にしてください。
+
+【全体の数字】
+- 枚数: {n}枚（うち画像つき {len(with_image)}枚）
+- 総合: 平均 {sum(totals) / n:.1f} / 最高 {max(totals)} / 最低 {min(totals)}
+- 技術品質の平均: {sum(techs) / n:.1f}/50、構図の平均: {sum(comps) / n:.1f}/50
+- よく出るタグ: {top_tags}
+
+【写真ごとの採点結果】
+""" + "\n".join(lines)
+
+    parts = [header, "\n【サムネイル】"]
+    for i, p in enumerate(photos):
+        thumb = p.get("thumbnail_b64")
+        if i in with_image and thumb:
+            parts.append(f"写真{i + 1}: {p['filename']}")
+            parts.append(types.Part.from_bytes(data=base64.b64decode(thumb), mime_type="image/jpeg"))
+    parts.append(f"\n【最初の質問】\n{question}")
+    return parts
+
+
 def score_badge(score: int) -> str:
     if score >= 85:
         return "🌟 優秀"

@@ -32,11 +32,13 @@ with st.sidebar:
                           help="オフなら、前に採点した同じ写真は過去の結果を再利用します")
 
 # ─── ファイルアップロード ─────────────────────────────────────
+# 採点が終わるたびに key を変えて、アップロード欄を空の状態に作り直す
 uploaded_files = st.file_uploader(
     "📁 写真をアップロード",
     type=["jpg", "jpeg", "png", "webp", "bmp", "tiff"],
     accept_multiple_files=True,
-    help="複数ファイルを一度に選択できます（Ctrl+クリックで複数選択）"
+    help="複数ファイルを一度に選択できます（Ctrl+クリックで複数選択）。採点が終わると自動で空になります",
+    key=f"uploader_{st.session_state.get('uploader_key', 0)}",
 )
 
 api_key = st.session_state.get("api_key", "")
@@ -129,26 +131,50 @@ if start_btn and uploaded_files:
     progress_bar.progress(1.0, text="✅ 採点完了！")
     status_text.empty()
 
-    if errors:
-        with st.expander(f"⚠️ {len(errors)}枚の処理に失敗しました"):
-            for err in errors:
-                st.text(err)
-
+    saved = False
     if results:
         results.sort(key=lambda x: x["total_score"], reverse=True)
-        save_session(
-            folder_name=f"{len(results)}枚",
-            results=results,
-            username=st.session_state.get("username")
-        )
+        try:
+            save_session(
+                folder_name=f"{len(results)}枚",
+                results=results,
+                username=st.session_state.get("username")
+            )
+            saved = True
+        except Exception as e:
+            errors.append(f"履歴への保存に失敗しました: {e}")
         st.session_state["results"] = results
+
+    # 画面を作り直したあとも見えるように、お知らせを残しておく
+    st.session_state["score_notes"] = {"reused": reused, "errors": errors, "saved": saved}
+    # アップロード欄を空にして、結果だけの画面で表示し直す
+    st.session_state["uploader_key"] = st.session_state.get("uploader_key", 0) + 1
+    st.rerun()
+
+# ─── 前回の採点のお知らせ ─────────────────────────────────────
+notes = st.session_state.get("score_notes")
+if notes:
+    if notes["reused"]:
+        st.info(f"♻️ {notes['reused']}枚は採点済みだったので、過去の結果を使いました")
+    if notes["errors"]:
+        with st.expander(f"⚠️ {len(notes['errors'])}件のエラーがありました"):
+            for err in notes["errors"]:
+                st.text(err)
 
 # ─── 結果表示 ──────────────────────────────────────────────
 if "results" in st.session_state:
     results = st.session_state["results"]
 
     st.divider()
-    st.subheader(f"🏆 採点結果ランキング（{len(results)}枚）")
+    col_head, col_btn = st.columns([3, 2])
+    with col_head:
+        st.subheader(f"🏆 採点結果ランキング（{len(results)}枚）")
+    with col_btn:
+        if notes and notes.get("saved") and st.button("💬 全体の傾向をチャットで聞く", use_container_width=True):
+            # 保存したばかりの採点回（履歴の先頭）を、まとめてチャットで開く
+            st.session_state["chat_mode"] = "multi"
+            st.session_state["chat_session_idx"] = 0
+            st.switch_page("pages/chat.py")
 
     scores = [r["total_score"] for r in results]
     col_a, col_b, col_c = st.columns(3)
@@ -192,6 +218,7 @@ if "results" in st.session_state:
 
                 if st.button("💬 この写真についてチャットで詳しく聞く", key=f"to_chat_{rank}"):
                     st.session_state["chat_photo"] = result
+                    st.session_state["chat_mode"] = "single"
                     st.switch_page("pages/chat.py")
 
             st.divider()

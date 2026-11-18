@@ -8,7 +8,7 @@ An AI-powered photo scoring and management tool built with Streamlit and Google 
 - **Custom Tags** — Define your own tags or let the AI generate them freely
 - **History** — Browse past evaluations
 - **Search** — Find photos by tags or scores
-- **Chat** — Conversational interface about your photo collection
+- **Chat** — Ask about a single photo, or about a whole scoring run (or your entire history) at once to get overall trends and advice
 - **User Authentication** — Secure login with per-user session management
 - **Supabase Backend** — Cloud database for persistent storage
 
